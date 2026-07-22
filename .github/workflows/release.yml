@@ -1,0 +1,155 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release 标签，例如 v1.0.0"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+env:
+  WAILS_VERSION: v2.12.0
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  windows:
+    name: Windows amd64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend and Wails
+        shell: pwsh
+        run: |
+          npm ci --prefix frontend
+          go install github.com/wailsapp/wails/v2/cmd/wails@${env:WAILS_VERSION}
+      - name: Test and build
+        shell: pwsh
+        run: |
+          go test ./...
+          wails build -platform windows/amd64 -clean
+      - name: Create ZIP
+        shell: pwsh
+        run: |
+          $name = "DrgBox-$env:RELEASE_TAG-windows-amd64"
+          $stage = Join-Path "release" $name
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "build/bin/DrgBoxDesktop.exe" (Join-Path $stage "DrgBox.exe")
+          Copy-Item "README.md" $stage
+          Copy-Item "data.example" (Join-Path $stage "data") -Recurse
+          Compress-Archive -Path $stage -DestinationPath "release/$name.zip" -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64
+          path: release/*.zip
+          if-no-files-found: error
+
+  linux:
+    name: Linux amd64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev zip
+      - name: Install frontend and Wails
+        run: |
+          npm ci --prefix frontend
+          go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+      - name: Test and build
+        run: |
+          go test ./...
+          wails build -platform linux/amd64 -clean -tags webkit2_41
+      - name: Create ZIP
+        run: |
+          name="DrgBox-${RELEASE_TAG}-linux-amd64"
+          stage="release/${name}"
+          mkdir -p "${stage}/data"
+          install -m 0755 build/bin/DrgBoxDesktop "${stage}/DrgBox"
+          cp README.md "${stage}/"
+          cp -R data.example/. "${stage}/data/"
+          cd release
+          zip -r "${name}.zip" "${name}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: release/*.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend and Wails
+        run: |
+          npm ci --prefix frontend
+          go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+      - name: Test and build
+        run: |
+          go test ./...
+          wails build -platform darwin/universal -clean
+      - name: Create ZIP
+        run: |
+          name="DrgBox-${RELEASE_TAG}-macos-universal"
+          stage="release/${name}"
+          mkdir -p "${stage}/data"
+          cp -R build/bin/DrgBoxDesktop.app "${stage}/DrgBox.app"
+          cp README.md "${stage}/"
+          cp -R data.example/. "${stage}/data/"
+          ditto -c -k --sequesterRsrc --keepParent "${stage}" "release/${name}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: release/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          generate_release_notes: true
+          files: release-assets/**/*.zip
+          fail_on_unmatched_files: true

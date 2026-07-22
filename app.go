@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -164,7 +163,7 @@ func (a *App) ChooseRuntimeExecutable(kind string) (string, error) {
 	}
 	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:   title,
-		Filters: []runtime.FileFilter{{DisplayName: "可执行文件", Pattern: "*.exe;*.cmd;*.bat"}},
+		Filters: runtimeExecutableFilters(),
 	})
 }
 func (a *App) ExitQuickLauncher() {
@@ -192,7 +191,15 @@ func locateRoot() string {
 			}
 		}
 	}
-	return `D:\Car1N0tCat`
+	// 发行版把 data 放在程序旁边；开发模式则回退到当前工作目录。
+	// 不在这里写死 Windows 盘符，确保 Linux 与 macOS 版本可以独立运行。
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Dir(exe)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "."
 }
 func (a *App) configPath() string   { return filepath.Join(a.root, "data", "tools.json") }
 func (a *App) categoryPath() string { return filepath.Join(a.root, "data", "categories.json") }
@@ -205,16 +212,22 @@ func runtimeCandidates(kind, base string) []string {
 			base,
 			filepath.Join(base, "python.exe"),
 			filepath.Join(base, "python3.exe"),
+			filepath.Join(base, "python"),
+			filepath.Join(base, "python3"),
 			filepath.Join(base, "bin", "python.exe"),
 			filepath.Join(base, "bin", "python3.exe"),
+			filepath.Join(base, "bin", "python"),
+			filepath.Join(base, "bin", "python3"),
 		}
 	default:
 		return []string{
 			base,
 			filepath.Join(base, "javaw.exe"),
 			filepath.Join(base, "java.exe"),
+			filepath.Join(base, "java"),
 			filepath.Join(base, "bin", "javaw.exe"),
 			filepath.Join(base, "bin", "java.exe"),
+			filepath.Join(base, "bin", "java"),
 		}
 	}
 }
@@ -256,11 +269,11 @@ func (a *App) runtimeExecutable(kind string) (string, error) {
 	var defaults []string
 	switch strings.ToLower(kind) {
 	case "python":
-		defaults = []string{filepath.Join(a.runtimePath(), "python3", "python.exe"), "python.exe", "python3.exe"}
+		defaults = []string{filepath.Join(a.runtimePath(), "python3", "python.exe"), filepath.Join(a.runtimePath(), "python3", "bin", "python3"), "python.exe", "python3.exe", "python3", "python"}
 	case "java11":
-		defaults = []string{filepath.Join(a.runtimePath(), "Java_path", "Java_11_win", "bin", "javaw.exe"), filepath.Join(a.runtimePath(), "Java_path", "Java_11_win", "bin", "java.exe"), "javaw.exe", "java.exe"}
+		defaults = []string{filepath.Join(a.runtimePath(), "Java_path", "Java_11_win", "bin", "javaw.exe"), filepath.Join(a.runtimePath(), "Java_path", "Java_11_win", "bin", "java.exe"), filepath.Join(a.runtimePath(), "Java_path", "Java_11", "bin", "java"), "javaw.exe", "java.exe", "java"}
 	default:
-		defaults = []string{filepath.Join(a.runtimePath(), "Java_path", "Java_8_win", "bin", "javaw.exe"), filepath.Join(a.runtimePath(), "Java_path", "Java_8_win", "bin", "java.exe"), "javaw.exe", "java.exe"}
+		defaults = []string{filepath.Join(a.runtimePath(), "Java_path", "Java_8_win", "bin", "javaw.exe"), filepath.Join(a.runtimePath(), "Java_path", "Java_8_win", "bin", "java.exe"), filepath.Join(a.runtimePath(), "Java_path", "Java_8", "bin", "java"), "javaw.exe", "java.exe", "java"}
 	}
 	for _, candidate := range defaults {
 		if strings.ContainsAny(candidate, `\/:`) {
@@ -1084,9 +1097,9 @@ func (a *App) OpenToolDirectory(id string) error {
 		return fmt.Errorf("工具路径不存在：%w", err)
 	}
 	if info.IsDir() {
-		return exec.Command("explorer.exe", filepath.Clean(tool.Path)).Start()
+		return openPathLocation(filepath.Clean(tool.Path), true)
 	}
-	return exec.Command("explorer.exe", "/select,", filepath.Clean(tool.Path)).Start()
+	return openPathLocation(filepath.Clean(tool.Path), false)
 }
 
 func (a *App) ServeToolIcon(w http.ResponseWriter, r *http.Request) {
@@ -1307,77 +1320,4 @@ func (a *App) RunTool(id string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("未找到工具：%s", id)
-}
-
-// consoleCommand 生成交给 cmd.exe /k 的单条命令。工作目录由 exec.Cmd.Dir 设置，
-// 避免 start、cd 和多层引号在中文/空格路径下被二次解析。
-func consoleCommand(executable, arguments string) string {
-	command := `call "` + strings.ReplaceAll(filepath.Clean(executable), `"`, `""`) + `"`
-	if arguments = strings.TrimSpace(arguments); arguments != "" {
-		command += " " + arguments
-	}
-	return command
-}
-
-// commandPrompt 使用 Windows 原生命令行字符串，避免 os/exec 再把内部引号转义成 \"。
-func commandPrompt(command string, keepOpen bool) *exec.Cmd {
-	mode := "/c"
-	if keepOpen {
-		mode = "/k"
-	}
-	cmd := exec.Command("cmd.exe")
-	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: "cmd.exe /d " + mode + " " + command}
-	return cmd
-}
-
-func (a *App) launch(t *Tool) error {
-	info, err := os.Stat(t.Path)
-	if err != nil {
-		return fmt.Errorf("启动路径不存在：%w", err)
-	}
-	if info.IsDir() {
-		// start 带空标题可正确处理中文、空格和末尾反斜杠，直接定位到用户配置的目录。
-		return exec.Command("cmd.exe", "/c", "start", "", filepath.Clean(t.Path)).Start()
-	}
-	args := strings.Fields(t.Args)
-	dir := filepath.Dir(t.Path)
-	typ := strings.ToLower(t.Type)
-	var cmd *exec.Cmd
-	switch {
-	case typ == "python":
-		py, runtimeErr := a.runtimeExecutable("python")
-		if runtimeErr != nil {
-			return runtimeErr
-		}
-		pythonArgs := `"` + strings.ReplaceAll(filepath.Clean(t.Path), `"`, `""`) + `"`
-		if strings.TrimSpace(t.Args) != "" {
-			pythonArgs += " " + strings.TrimSpace(t.Args)
-		}
-		cmd = commandPrompt(consoleCommand(py, pythonArgs), true)
-	case typ == "java8" || typ == "java11":
-		java, runtimeErr := a.runtimeExecutable(typ)
-		if runtimeErr != nil {
-			return runtimeErr
-		}
-		cmd = exec.Command(java, append([]string{"-jar", t.Path}, args...)...)
-	case typ == "批处理":
-		// 使用 call 直接执行 .bat/.cmd，且通过 cmd.Dir 设置工作目录。
-		// 不能把 cd、start 与脚本路径拼成一条命令，否则中文路径和引号会被 CMD 二次解析而报“文件名、目录名或卷标语法不正确”。
-		command := fmt.Sprintf(`call "%s"`, t.Path)
-		if strings.TrimSpace(t.Args) != "" {
-			command += " " + t.Args
-		}
-		cmd = commandPrompt(command, true)
-	case typ == "命令行":
-		cmd = commandPrompt(consoleCommand(t.Path, t.Args), true)
-	case typ == "powershell":
-		psArgs := []string{"-NoExit", "-ExecutionPolicy", "Bypass", "-File", t.Path}
-		psArgs = append(psArgs, args...)
-		cmd = exec.Command("powershell.exe", psArgs...)
-	default:
-		// GUI 程序不能使用 HideWindow；蚁剑等 Electron 应用会连主窗口一起被隐藏。
-		cmd = exec.Command(t.Path, args...)
-	}
-	cmd.Dir = dir
-	return cmd.Start()
 }
