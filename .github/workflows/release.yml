@@ -41,6 +41,7 @@ jobs:
       - name: Test and build
         shell: pwsh
         run: |
+          npm run build --prefix frontend
           go test ./...
           wails build -platform windows/amd64 -clean
       - name: Create ZIP
@@ -83,6 +84,7 @@ jobs:
           go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
       - name: Test and build
         run: |
+          npm run build --prefix frontend
           go test ./...
           wails build -platform linux/amd64 -clean -tags webkit2_41
       - name: Create ZIP
@@ -121,6 +123,7 @@ jobs:
           go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
       - name: Test and build
         run: |
+          npm run build --prefix frontend
           go test ./...
           wails build -platform darwin/universal -clean
       - name: Create ZIP
