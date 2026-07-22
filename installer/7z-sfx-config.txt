@@ -1,0 +1,6 @@
+;!@Install@!UTF-8!
+Title="DRGBOX 本地分类工具箱 安装"
+BeginPrompt="将 DRGBOX 安装到 D:\Car1N0tCat\DRGBOX，并创建桌面快捷方式。"
+RunProgram="install.cmd"
+GUIMode="1"
+;!@InstallEnd@!
