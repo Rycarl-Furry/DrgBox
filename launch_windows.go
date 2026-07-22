@@ -17,6 +17,8 @@ func runtimeExecutableFilters() []runtime.FileFilter {
 	return []runtime.FileFilter{{DisplayName: "可执行文件", Pattern: "*.exe;*.cmd;*.bat"}}
 }
 
+func hideWindowOnClose() bool { return true }
+
 func openPathLocation(path string, isDir bool) error {
 	if isDir {
 		return exec.Command("explorer.exe", path).Start()

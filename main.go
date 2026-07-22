@@ -22,7 +22,7 @@ func main() {
 		Width:             1440,
 		Height:            900,
 		Frameless:         true,
-		HideWindowOnClose: true,
+		HideWindowOnClose: hideWindowOnClose(),
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
